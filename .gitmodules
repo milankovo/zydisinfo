@@ -1,3 +1,6 @@
 [submodule "src/deps/zydis"]
 	path = src/deps/zydis
 	url = https://github.com/zyantific/zydis.git
+[submodule "cmake/zig-cross"]
+	path = src/deps/zig-cross
+	url = https://github.com/mrexodia/zig-cross.git

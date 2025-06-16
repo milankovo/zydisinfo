@@ -1,0 +1,26 @@
+check-idasdk:
+    @echo "IDASDK is set to: {{env_var('IDASDK')}}"
+
+_build target: check-idasdk
+    cmake -B "build-{{target}}" -DCMAKE_TOOLCHAIN_FILE="deps/zig-cross/{{target}}.cmake" -S src/ -Wno-dev
+    rm -f $IDASDK/bin/plugins/zydisinfo.*
+    cmake --build "build-{{target}}" --target all
+    mv -f $IDASDK/bin/plugins/zydisinfo.* "build-{{target}}/"
+
+build-linux-x86_64: (_build "x86_64-linux-gnu")
+build-macos-x86_64: (_build "x86_64-macos-none")
+build-macos-aarch64: (_build "aarch64-macos-none")
+build-windows-x86_64: (_build "x86_64-windows-gnu")
+
+build: build-linux-x86_64 build-macos-x86_64 build-macos-aarch64 build-windows-x86_64
+
+_clean target:
+    -cmake --build "build-{{target}}" --target clean
+    rm -rf "build-{{target}}"
+
+clean-linux-x86_64: (_clean "x86_64-linux-gnu")
+clean-macos-x86_64: (_clean "x86_64-macos-none")
+clean-macos-aarch64: (_clean "aarch64-macos-none")
+clean-windows-x86_64: (_clean "x86_64-windows-gnu")
+
+clean: clean-linux-x86_64 clean-macos-x86_64 clean-macos-aarch64 clean-windows-x86_64
