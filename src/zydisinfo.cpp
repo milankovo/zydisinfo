@@ -234,6 +234,76 @@ static struct
 
 };
 
+struct zydis_prefix_t : public user_defined_prefix_t
+{
+  zydis_prefix_t(const void *owner) : user_defined_prefix_t(10, owner) {}
+  virtual void idaapi get_user_defined_prefix(
+      qstring *out,
+      ea_t ea,
+      const insn_t & /*insn*/,
+      int lnnum,
+      int indent,
+      const char *line) override
+  {
+    out->qclear(); // empty prefix by default
+
+    msg("get_user_defined_prefix: %llx\n", ea);
+
+    // We want to display the prefix only the lines which
+    // contain the instruction itself
+
+    if (indent != -1) // a directive
+      return;
+
+    if (line[0] == '\0') // empty line
+      return;
+
+    // if (tag_advance(line, 1)[-1] == ash.cmnt[0]) // comment line...
+    //   return;
+
+    // We don't want the prefix to be printed again for other lines of the
+    // same instruction/data. For that we remember the line number
+    // and compare it before generating the prefix
+
+    // if (pd->old_ea == ea && pd->old_lnnum == lnnum)
+    //   return;
+
+    // Ok, seems that we found an instruction line.
+
+    // Let's display the size of the current item as the user-defined prefix
+    asize_t our_size = get_item_size(ea);
+
+    // We don't bother about the width of the prefix
+    // because it will be padded with spaces by the kernel
+
+    logger.clear();
+    void decode_segments(ea_t ea);
+    //msg("decode_segments: %llx\n", ea);
+    decode_segments(ea);
+
+    out->append(" ", 1);
+    auto lines = logger.get_lines();
+    for (auto &line : lines)
+    {
+      //msg("line: %s\n", line.line.c_str());
+      // line.line.append(line.line.c_str(), line.line.length());
+      // line.color = SCOLOR_PREFIX;
+      //out->append(SCOLOR_ON SCOLOR_IMPNAME "test" SCOLOR_OFF);
+      
+      out->append(line.line.c_str(), line.line.length());
+      break;
+    }
+    //out->append(SCOLOR_OFF);
+    //out->append(" xx ");
+    // out->assign(logger.get_lines().begin(), );
+    // out->sprnt("%s", logger.get_lines().);
+
+    // Remember the address and line number we produced the line prefix for:
+    // pd->old_ea = ea;
+    // pd->old_lnnum = lnnum;
+  }
+};
+
 //-------------------------------------------------------------------------
 struct plugin_ctx_t : public plugmod_t, public event_listener_t
 {
@@ -1589,6 +1659,74 @@ void decode(ea_t ea)
   PrintSegments(&instruction, &data[0], ZYAN_TRUE);
 }
 
+void decode_segments(ea_t ea)
+{
+  ZydisDecoder decoder;
+  ZydisMachineMode machine_mode;
+  ZydisStackWidth stack_width;
+  ZyanU8 hexbytes_index = 2;
+
+  auto seg = getseg(ea);
+  if (seg == nullptr)
+  {
+    ZYAN_PRINTF("Failed to get segment for ea %a\n", ea);
+    return;
+  }
+
+  auto bitness = seg->bitness;
+  switch (bitness)
+  {
+  case 0:
+    stack_width = ZYDIS_STACK_WIDTH_16;
+    machine_mode = ZYDIS_MACHINE_MODE_REAL_16;
+    break;
+  case 1:
+    stack_width = ZYDIS_STACK_WIDTH_32;
+    machine_mode = ZYDIS_MACHINE_MODE_LONG_COMPAT_32;
+    break;
+  case 2:
+    stack_width = ZYDIS_STACK_WIDTH_64;
+    machine_mode = ZYDIS_MACHINE_MODE_LONG_64;
+    break;
+  default:
+    return;
+  }
+
+  ZyanStatus status = ZydisDecoderInit(&decoder, machine_mode, stack_width);
+  if (!ZYAN_SUCCESS(status))
+  {
+    ZYAN_PRINTF("Failed to initialize decoder\n");
+    return;
+  }
+
+  ZyanU8 data[ZYDIS_MAX_INSTRUCTION_LENGTH];
+  ZyanU8 byte_length = ZYDIS_MAX_INSTRUCTION_LENGTH;
+
+  if (get_bytes(data, ZYDIS_MAX_INSTRUCTION_LENGTH, ea) <= 0)
+  {
+    // ZYAN_PRINTF("Failed to read %d bytes at %a\n", ZYDIS_MAX_INSTRUCTION_LENGTH, ea);
+    return;
+  }
+
+  ZydisDecodedInstruction instruction;
+  ZydisDecodedOperand operands[ZYDIS_MAX_OPERAND_COUNT];
+  msg("Decoding %d bytes at %llx\n", byte_length, ea);
+
+  status = ZydisDecoderDecodeFull(&decoder, &data, byte_length, &instruction, operands);
+  if (!ZYAN_SUCCESS(status))
+  {
+    msg("Failed to decode instruction\n");
+    // PrintStatusError(status, "Failed to decode instruction");
+    return;
+  }
+  msg("Decoded %d bytes at %llx\n", byte_length, ea);
+
+  // PrintInstruction(&decoder, &instruction, operands, ea);
+  //ZYAN_PUTS("");
+  // PrintSectionHeader("SEGMENTS");
+  PrintSegments(&instruction, &data[0], ZYAN_TRUE);
+}
+
 //--------------------------------------------------------------------------
 ssize_t idaapi plugin_ctx_t::on_event(ssize_t code, va_list va)
 {
@@ -1736,10 +1874,14 @@ static plugmod_t *idaapi init()
   addon_info.name = "Zydis info";
   addon_info.producer = "Milanek";
   addon_info.url = "https://github.com/milankovo/zydisinfo";
-  addon_info.version = "1.0";
+  addon_info.version = "1.1";
   register_addon(&addon_info);
 
-  return new plugin_ctx_t;
+  auto ctx = new plugin_ctx_t;
+
+  //new zydis_prefix_t(ctx);
+
+  return ctx;
 }
 
 //--------------------------------------------------------------------------
