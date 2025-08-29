@@ -32,3 +32,8 @@
 *.app
 
 build/
+.env/
+.venv/
+.direnv/
+.envrc
+.artifacts/

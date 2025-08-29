@@ -1,0 +1,154 @@
+name: build
+
+on:
+  push:
+    branches: [main, gha-hcli]
+    paths-ignore:
+      - "**.md"
+    tags:
+      - "v*"
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - "**.md"
+
+permissions: read-all
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    permissions:
+      # for upload to release
+      contents: write
+    name: IDA ${{ matrix.os_ida.ida_version }} on ${{ matrix.os_ida.os_name }}
+    runs-on: ${{ matrix.os_ida.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os_ida:
+          - os: ubuntu-latest
+            os_name: "linux"
+            ida_version: "9.2"
+            ida_slug: "release/9.2/ida-essential/ida-essential_92_x64linux.run"
+            sdk_slug: "release/9.2/sdk-and-utilities/idasdk92.zip"
+            sdk_subdir: "ida-sdk-ida-v9.2/src/"
+
+          - os: windows-latest
+            os_name: "windows"
+            ida_version: "9.2"
+            ida_slug: "release/9.2/ida-essential/ida-essential_92_x64win.exe"
+            sdk_slug: "release/9.2/sdk-and-utilities/idasdk92.zip"
+            sdk_subdir: "ida-sdk-ida-v9.2/src/"
+
+          - os: macos-latest
+            os_name: "macos"
+            ida_version: "9.2"
+            ida_slug: "release/9.2/ida-essential/ida-essential_92_armmac.app.zip"
+            # ida_slug: "release/9.2/ida-essential/ida-essential_92_x64mac.app.zip"
+            sdk_slug: "release/9.2/sdk-and-utilities/idasdk92.zip"
+            sdk_subdir: "ida-sdk-ida-v9.2/src/"
+
+          - os: ubuntu-latest
+            os_name: "linux"
+            ida_version: "9.1"
+            ida_slug: "release/9.1/ida-essential/ida-essential_91_x64linux.run"
+            sdk_slug: "release/9.1/sdk-and-utilities/idasdk91.zip"
+            sdk_subdir: "idasdk91/"
+          
+          - os: windows-latest
+            os_name: "windows"
+            ida_version: "9.1"
+            ida_slug: "release/9.1/ida-essential/ida-essential_91_x64win.exe"
+            sdk_slug: "release/9.1/sdk-and-utilities/idasdk91.zip"
+            sdk_subdir: "idasdk91/"
+          
+          - os: macos-latest
+            os_name: "macos"
+            ida_version: "9.1"
+            ida_slug: "release/9.1/ida-essential/ida-essential_91_armmac.app.zip"
+            # ida_slug: "release/9.1/ida-essential/ida-essential_91_x64mac.app.zip"
+            sdk_slug: "release/9.1/sdk-and-utilities/idasdk91.zip"
+            sdk_subdir: "idasdk91/"
+
+          - os: ubuntu-latest
+            os_name: "linux"
+            ida_version: "9.0"
+            ida_slug: "release/9.0/ida-essential/ida-essential_90_x64linux.run"
+            sdk_slug: "release/9.0/sdk-and-utilities/idasdk90.zip"
+            sdk_subdir: "idasdk90/"
+          
+          - os: windows-latest
+            os_name: "windows"
+            ida_version: "9.0"
+            ida_slug: "release/9.0/ida-essential/ida-essential_90_x64win.exe"
+            sdk_slug: "release/9.0/sdk-and-utilities/idasdk90.zip"
+            sdk_subdir: "idasdk90/"
+          
+          - os: macos-latest
+            os_name: "macos"
+            ida_version: "9.0"
+            ida_slug: "release/9.0/ida-essential/ida-essential_90_armmac.app.zip"
+            # ida_slug: "release/9.0/ida-essential/ida-essential_90_x64mac.app.zip"
+            sdk_slug: "release/9.0/sdk-and-utilities/idasdk90.zip"
+            sdk_subdir: "idasdk90/"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          submodules: "recursive"
+
+      - name: Setup uv
+        # on act, need use v5 instead of v6, due to:
+        # https://github.com/astral-sh/setup-uv/issues/535
+        # (ultimately an issue with act images)
+        uses: astral-sh/setup-uv@v5
+
+      - name: Download IDA SDK ${{ matrix.os_ida.ida_version }}
+        run: |
+          uvx --from ida-hcli hcli --disable-updates download ${{ matrix.os_ida.sdk_slug }}
+          mkdir -p ./sdk/
+          unzip idasdk*.zip -d ./sdk/
+          mv ./sdk/${{ matrix.os_ida.sdk_subdir }}/* ./sdk/
+        env:
+          HCLI_API_KEY: ${{ secrets.HCLI_API_KEY }}
+
+      - name: Fetch ida-cmake
+        run: |
+          git clone https://github.com/allthingsida/ida-cmake.git ./sdk/ida-cmake
+          cd ./sdk/ida-cmake
+
+      - name: Build
+        env:
+          IDASDK: ${{ github.workspace }}/sdk
+        run: |
+          cmake -B build -DEA64=YES -S src/ -DCMAKE_POSITION_INDEPENDENT_CODE=ON
+          cmake --build build --config Release
+          mkdir ./zydisinfo-build/
+          cp ./sdk/bin/plugins/zydisinfo* ./zydisinfo-build/
+          jq '.plugin.idaVersions = "==${{ matrix.os_ida.ida_version }}"' ida-plugin.json > ./zydisinfo-build/ida-plugin.json
+
+      # TODO: test: install the plugin and run IDA and confirm no crash
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: zydisinfo-ida${{ matrix.os_ida.ida_version }}-${{ matrix.os_ida.os_name }}
+          path: ./zydisinfo-build/*
+
+      - run: mkdir ./zydisinfo-artifact/
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: zydisinfo-ida${{ matrix.os_ida.ida_version }}-${{ matrix.os_ida.os_name }}
+          path: ./zydisinfo-artifact/
+      
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v0.1.14
+        with:
+          files: "./zydisinfo-artifact/*.zip"
+          fail_on_unmatched_files: true
