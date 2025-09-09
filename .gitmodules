@@ -1,3 +1,6 @@
 [submodule "src/deps/zydis"]
 	path = src/deps/zydis
 	url = https://github.com/zyantific/zydis.git
+[submodule "src/deps/ida-sdk"]
+	path = src/deps/ida-sdk
+	url = https://github.com/HexRaysSA/ida-sdk.git
