@@ -1,0 +1,79 @@
+name: build
+
+on:
+  push:
+    branches: [main, gha-oss-sdk]
+    paths-ignore:
+      - "**.md"
+    tags:
+      - "v*"
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - "**.md"
+
+permissions: read-all
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    permissions:
+      # for upload to release
+      contents: write
+    name: IDA 9.2 on ${{ matrix.os.name }}
+    runs-on: ${{ matrix.os.image }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - image: ubuntu-latest
+            name: "linux"
+
+          - image: windows-latest
+            name: "windows"
+
+          - image: macos-latest
+            name: "macos"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          submodules: "recursive"
+
+      - name: Fetch ida-cmake
+        run: |
+          git clone https://github.com/allthingsida/ida-cmake.git ./src/deps/ida-sdk/src/ida-cmake
+
+      - name: Build
+        env:
+          IDASDK: ${{ github.workspace }}/src/deps/ida-sdk/src/
+        run: |
+          cmake -B build -DEA64=YES -S src/ -DCMAKE_POSITION_INDEPENDENT_CODE=ON
+          cmake --build build --config Release
+          mkdir ./zydisinfo-build/
+          cp ./src/deps/ida-sdk/src/bin/plugins/zydisinfo* ./zydisinfo-build/
+          jq '.plugin.idaVersions = "==9.2"' ida-plugin.json > ./zydisinfo-build/ida-plugin.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: zydisinfo-ida92-${{ matrix.os.name }}
+          path: ./zydisinfo-build/*
+
+      - run: mkdir ./zydisinfo-artifact/
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: zydisinfo-ida92-${{ matrix.os.name }}
+          path: ./zydisinfo-artifact/
+      
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v0.1.14
+        with:
+          files: "./zydisinfo-artifact/*.zip"
+          fail_on_unmatched_files: true

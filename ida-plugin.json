@@ -1,0 +1,13 @@
+{
+  "IDAMetadataDescriptorVersion": 1,
+  "plugin": {
+    "name": "zydisinfo",
+    "entryPoint": "zydisinfo",
+    "version": "v1.0",
+    "idaVersions": "9.2",
+    "description": "provides information about the instruction at the current cursor position using the Zydis disassembler.",
+    "categories": [
+      "ui-ux-and-visualization"
+    ]
+  }
+}
