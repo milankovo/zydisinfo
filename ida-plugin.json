@@ -3,7 +3,7 @@
   "plugin": {
     "name": "zydisinfo",
     "entryPoint": "zydisinfo",
-    "version": "1.0",
+    "version": "1.1",
     "idaVersions": ["9.0", "9.1", "9.2"],
     "platforms": [
       "windows-x86_64",

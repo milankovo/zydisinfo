@@ -31,3 +31,9 @@ Note: The Zydisinfo plugin is compatible with IDA Pro 9.0 SP1. While it has been
 ## Demonstration
 
 ![pushed](images/pushad.png)
+
+## New in v1.1
+
+- Introduced colored highlighting for instruction prefixes. This feature requires IDA Pro version 9.2 or newer due to a previously fixed bug in earlier versions.
+- To configure the plugin, navigate to `Options -> Zydis Info...` in the menu.
+![prefixes](images/prefixes.png)
