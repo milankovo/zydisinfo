@@ -1,7 +1,10 @@
 #include <type_traits>
 #include <idp.hpp>
 #include <loader.hpp>
+#include <kernwin.hpp>
+#include <moves.hpp>
 #include <inttypes.h>
+#include <registry.hpp>
 #include <Zydis/Zydis.h>
 
 constexpr bool ONLY_X86 = false;
@@ -35,6 +38,8 @@ constexpr bool ONLY_X86 = false;
 #define ZYAN_VT100SGR_FG_WHITE SCOLOR_HIDNAME
 #define ZYAN_VT100SGR_FG_YELLOW SCOLOR_SEGNAME
 #define ZYAN_VT100SGR_FG_DEFAULT SCOLOR_DEFAULT
+
+void decode_segments(ea_t ea, ZyanBool print_hints = ZYAN_TRUE);
 
 struct ida_highlight_state_machine
 {
@@ -234,29 +239,53 @@ static struct
 
 };
 
+#if IDA_SDK_VERSION >= 920
+
+struct zydis_prefix_t;
+
+DECLARE_LISTENER(prefix_ui_listener_t, zydis_prefix_t, ctx);
+
 struct zydis_prefix_t : public user_defined_prefix_t
 {
-  zydis_prefix_t(const void *owner) : user_defined_prefix_t(10, owner) {}
+  prefix_ui_listener_t ui_listener = prefix_ui_listener_t(*this);
+
+  zydis_prefix_t(const void *owner) : user_defined_prefix_t(16, owner), ui_listener(prefix_ui_listener_t(*this))
+  {
+    hook_event_listener(HT_UI, &ui_listener, owner);
+  }
+
+  ~zydis_prefix_t()
+  {
+    unhook_event_listener(HT_UI, &ui_listener);
+  }
+
   virtual void idaapi get_user_defined_prefix(
       qstring *out,
       ea_t ea,
-      const insn_t & /*insn*/,
+      const insn_t &insn,
       int lnnum,
       int indent,
       const char *line) override
   {
     out->qclear(); // empty prefix by default
 
-    msg("get_user_defined_prefix: %llx\n", ea);
-
-    // We want to display the prefix only the lines which
-    // contain the instruction itself
-
     if (indent != -1) // a directive
       return;
 
     if (line[0] == '\0') // empty line
       return;
+
+    auto flags = get_flags(ea);
+    if (!is_code(flags))
+      return;
+
+    if (insn.itype == 0)
+    {
+      // not an instruction
+      return;
+    }
+
+    // calcrel
 
     // if (tag_advance(line, 1)[-1] == ash.cmnt[0]) // comment line...
     //   return;
@@ -270,39 +299,132 @@ struct zydis_prefix_t : public user_defined_prefix_t
 
     // Ok, seems that we found an instruction line.
 
-    // Let's display the size of the current item as the user-defined prefix
-    asize_t our_size = get_item_size(ea);
-
     // We don't bother about the width of the prefix
     // because it will be padded with spaces by the kernel
 
     logger.clear();
-    void decode_segments(ea_t ea);
-    //msg("decode_segments: %llx\n", ea);
-    decode_segments(ea);
+    decode_segments(ea, ZYAN_FALSE);
+
+    // msg("zydis_prefix_t::get_user_defined_prefix: %llx lnnum: %d line: '%s'\n", ea, lnnum, line);
 
     out->append(" ", 1);
     auto lines = logger.get_lines();
     for (auto &line : lines)
     {
-      //msg("line: %s\n", line.line.c_str());
-      // line.line.append(line.line.c_str(), line.line.length());
-      // line.color = SCOLOR_PREFIX;
-      //out->append(SCOLOR_ON SCOLOR_IMPNAME "test" SCOLOR_OFF);
-      
       out->append(line.line.c_str(), line.line.length());
-      break;
     }
-    //out->append(SCOLOR_OFF);
-    //out->append(" xx ");
-    // out->assign(logger.get_lines().begin(), );
-    // out->sprnt("%s", logger.get_lines().);
-
-    // Remember the address and line number we produced the line prefix for:
-    // pd->old_ea = ea;
-    // pd->old_lnnum = lnnum;
   }
 };
+
+size_t get_prefix_size(ea_t current_ea)
+{
+  // static size_t prefix_size = 0;
+  // if (prefix_size > 0)
+  //   return prefix_size;
+  char tmp[50];
+  return ea2str(tmp, sizeof(tmp), current_ea);
+  // prefix_size = ea2str(tmp, sizeof(tmp), current_ea);
+  // return prefix_size;
+};
+
+//--------------------------------------------------------------------------
+ssize_t idaapi prefix_ui_listener_t::on_event(ssize_t code, va_list va)
+{
+  if (code != ui_get_custom_viewer_hint)
+    return 0;
+
+  ///< cb: ui wants to display a hint for a viewer (idaview or custom).
+  ///< Every subscriber is supposed to append the hint lines
+  ///< to HINT and increment IMPORTANT_LINES accordingly.
+  ///< Completely overwriting the existing lines in HINT
+  ///< is possible but not recommended.
+  ///< If the REG_HINTS_MARKER sequence is found in the
+  ///< returned hints string, it will be replaced with the
+  ///< contents of the "regular" hints.
+  ///< If the SRCDBG_HINTS_MARKER sequence is found in the
+  ///< returned hints string, it will be replaced with the
+  ///< contents of the source-level debugger-generated hints.
+  ///< The following keywords might appear at the beginning of the
+  ///< returned hints:
+  ///< HIGHLIGHT text\n
+  ///<   where text will be highlighted
+  ///< CAPTION caption\n
+  ///<   caption for the hint widget
+  ///< \param[out] hint             (::qstring *) the output string,
+  ///<                              on input contains hints from the previous subscribes
+  ///< \param viewer                (TWidget*) viewer
+  ///< \param place                 (::place_t *) current position in the viewer
+  ///< \param[out] important_lines  (int *) number of important lines,
+  ///<                                     should be incremented,
+  ///<                                     if zero, the result is ignored
+  ///< \retval 0 continue collecting hints with other subscribers
+  ///< \retval 1 stop collecting hints
+  qstring &hint = *va_arg(va, qstring *);
+  TWidget *viewer = va_arg(va, TWidget *);
+  place_t *place = va_arg(va, place_t *);
+  int *important_lines = va_arg(va, int *);
+
+  if (place == nullptr)
+    return 0;
+  if (get_widget_type(viewer) != BWN_DISASM) // only show hint for disassembly viewer
+    return 0;
+
+  // msg("plugin_ctx_t::on_event: got hint request for unknown viewer %p\n", viewer);
+  if (place == nullptr)
+    return 0;
+  // idaplace_t *idaplace = (idaplace_t *)place;
+
+  auto current_ea = place->toea();
+
+  if (current_ea == BADADDR)
+    return 0;
+
+  if (!is_code(get_flags(current_ea)))
+    return 0;
+
+  listing_location_t current_location{};
+  auto ok = get_custom_viewer_location(&current_location, viewer, true);
+  if (!ok)
+    return 0;
+
+  auto &loc = *current_location.loc;
+  auto &pos = loc.rinfo.pos;
+
+  // msg("text %p\n", current_location.text);
+  // msg("text: %s\n", current_location.text->c_str());
+
+  // hint.cat_sprnt("placeea %p line num: %d x: %d y: %d valid: %d text: %s\n", place->toea(), place->lnnum, pos.cx, pos.cy, loc.is_valid(), current_location.text->c_str());
+
+  // auto text_copy = *current_location.text;
+
+  auto prefix_size = get_prefix_size(current_ea);
+  if (prefix_size <= 0)
+    return 0;
+
+  auto item_size = get_item_size(current_ea);
+
+  prefix_size += 1;
+  // don't show hint if mouse is not over it
+  if (pos.cx < prefix_size)
+    return 0;
+  auto hex_bytes_size = item_size * 3 - 2;
+  auto prefix_end = hex_bytes_size + prefix_size;
+  if (pos.cx > prefix_end)
+    return 0;
+
+  logger.clear();
+  decode_segments(current_ea);
+
+  for (auto &&line : logger.get_lines())
+  {
+    hint.append(line.line.c_str(), line.line.length());
+    hint.append("\n");
+    *important_lines += 1;
+  }
+  return 0;
+}
+
+#endif
 
 //-------------------------------------------------------------------------
 struct plugin_ctx_t : public plugmod_t, public event_listener_t
@@ -311,12 +433,182 @@ struct plugin_ctx_t : public plugmod_t, public event_listener_t
   strvec_t lines;
   ea_t current_ea = BADADDR;
 
+#if IDA_SDK_VERSION >= 920
+  zydis_prefix_t *prefix = nullptr;
+  void show_prefix(bool show)
+  {
+    if (show)
+    {
+      if (prefix == nullptr)
+        prefix = new zydis_prefix_t(this);
+    }
+    else
+    {
+      delete prefix;
+      prefix = nullptr;
+    }
+  }
+#endif
+
   plugin_ctx_t();
   virtual bool idaapi run(size_t) override;
   void show_demo();
   virtual ssize_t idaapi on_event(ssize_t code, va_list va) override;
   void decode_at_current_ea();
 };
+
+#if IDA_SDK_VERSION >= 920
+
+enum prefix_visibility_t
+{
+  PREFIX_UNDEFINED = 0,
+  PREFIX_SHOW = 1,
+  PREFIX_HIDE = 2
+};
+
+struct prefix_config_t
+{
+  constexpr static const char *REG_SUBKEY = "show_prefix";
+  constexpr static const char *REG_SECTION = "zydisinfo";
+  constexpr static const char *NETNODE_NAME = "$ zydisinfo";
+
+  // per idb setting,
+  // 0 = undefined, 1 = show, 2 = hide
+  prefix_visibility_t show_in_idb = PREFIX_UNDEFINED;
+  // global setting, default is false
+  prefix_visibility_t show_in_all_idbs = PREFIX_UNDEFINED;
+
+  prefix_config_t()
+  {
+    read();
+  }
+
+  bool show() const
+  {
+    if (show_in_idb != PREFIX_UNDEFINED)
+      return show_in_idb == PREFIX_SHOW;
+    if (show_in_all_idbs != PREFIX_UNDEFINED)
+      return show_in_all_idbs == PREFIX_SHOW;
+    return false;
+  }
+
+  void save()
+  {
+    netnode n(NETNODE_NAME, 0, true);
+    switch (show_in_idb)
+    {
+    case PREFIX_SHOW:
+      n.set_long(1);
+      break;
+    case PREFIX_HIDE:
+      n.set_long(0);
+      break;
+    case PREFIX_UNDEFINED:
+      n.kill();
+      break;
+    }
+
+    if (show_in_all_idbs != PREFIX_UNDEFINED)
+    {
+      bool global_show = show_in_all_idbs == PREFIX_SHOW;
+      reg_write_bool(REG_SECTION, global_show, REG_SUBKEY);
+    }
+    else
+    {
+      reg_delete(REG_SECTION, REG_SUBKEY);
+    }
+  }
+
+  void read()
+  {
+    if (reg_exists(REG_SECTION, REG_SUBKEY))
+    {
+      // load global setting
+      bool global_show = reg_read_bool(REG_SECTION, false, REG_SUBKEY);
+      show_in_all_idbs = global_show ? PREFIX_SHOW : PREFIX_HIDE;
+    }
+    else
+    {
+      show_in_all_idbs = PREFIX_UNDEFINED;
+    }
+
+    // load per idb setting
+    netnode n(NETNODE_NAME, 0, true);
+    auto val = n.long_value();
+    switch (val)
+    {
+    case 1:
+      show_in_idb = PREFIX_SHOW;
+      break;
+    case 0:
+      show_in_idb = PREFIX_HIDE;
+      break;
+    default:
+      show_in_idb = PREFIX_UNDEFINED;
+      break;
+    }
+  }
+};
+
+struct configure_action_t : public action_handler_t
+{
+  plugin_ctx_t *plugin;
+  configure_action_t(plugin_ctx_t *p) : action_handler_t(), plugin(p) {}
+
+  virtual int idaapi activate(action_activation_ctx_t *ctx) override
+  {
+    ushort flags = 0;
+
+    /*
+| global defined | global value | local defined | local value | result |
+| -------------- | ------------ | ------------- | ----------- | ------ |
+| _              | _            | True          | True        | True   |
+| _              | _            | True          | False       | False  |
+| True           | True         | False         | _           | True   |
+| True           | False        | False         | _           | False  |
+
+(global && global_def && !local_def) || (local && local_def)
+    */
+    const char *form = R"(HELP
+This dialog allows to configure when to show the instruction prefix generated by the Zydis Info plugin.
+
+If both options are defined, the per-idb option has precedence over the global option.
+If neither option is enabled, the prefix will not be shown.
+
+Changes to the global option will only affect new IDBs.
+ENDHELP
+Zydis Info configuration
+
+
+<#Prefixes in this idb#Show prefixes in ~t~his idb:C>
+<#Prefixes in all idbs#Show prefixes in ~a~ll idbs:C>>
+
+)";
+
+    CASSERT(sizeof(flags) == sizeof(ushort));
+
+    prefix_config_t config;
+
+    if (config.show_in_idb == PREFIX_SHOW)
+      flags |= 1;
+    if (config.show_in_all_idbs == PREFIX_SHOW)
+      flags |= 2;
+
+    if (1 == ask_form(form, &flags))
+    {
+      config.show_in_idb = (flags & 1) ? PREFIX_SHOW : PREFIX_HIDE;
+      config.show_in_all_idbs = (flags & 2) ? PREFIX_SHOW : PREFIX_HIDE;
+      config.save();
+      plugin->show_prefix(config.show());
+    }
+    return 1;
+  }
+  virtual action_state_t idaapi update(action_update_ctx_t *ctx) override
+  {
+    return AST_ENABLE_ALWAYS;
+  }
+};
+#endif
 
 //---------------------------------------------------------------------------
 // Keyboard callback
@@ -363,6 +655,29 @@ static void idaapi ct_curpos(TWidget *v, void *)
 //-------------------------------------------------------------------------
 plugin_ctx_t::plugin_ctx_t()
 {
+// intel x86 processor and ida >= 9.2
+#if IDA_SDK_VERSION >= 920
+
+  if (PH.id == PLFM_386)
+  {
+    prefix_config_t config;
+    show_prefix(config.show());
+
+    static const action_desc_t action_desc = ACTION_DESC_LITERAL_PLUGMOD(
+        "zydisinfo:configure",         // The action name. This is how the action will be identified in the system
+        "Zydis Info...",        // The action text. This text will be displayed in menus and toolbars.
+        new configure_action_t(this),  // The action handler.
+        this,                          // plgmod_t *plugin
+        nullptr,                       // Optional: the action shortcut (nullptr if none)
+        "Configure Zydis Info plugin", // Optional: the action tooltip (nullptr if none)
+        0);                            // Optional: the action icon (0 if none)
+    register_action(action_desc);
+
+    attach_action_to_menu(
+        "Options", "zydisinfo:configure", SETMENU_APP);
+  }
+
+#endif
 }
 
 bool get_auto_comment(qstring *buf, ea_t ea)
@@ -1659,7 +1974,7 @@ void decode(ea_t ea)
   PrintSegments(&instruction, &data[0], ZYAN_TRUE);
 }
 
-void decode_segments(ea_t ea)
+void decode_segments(ea_t ea, ZyanBool print_hints)
 {
   ZydisDecoder decoder;
   ZydisMachineMode machine_mode;
@@ -1710,7 +2025,7 @@ void decode_segments(ea_t ea)
 
   ZydisDecodedInstruction instruction;
   ZydisDecodedOperand operands[ZYDIS_MAX_OPERAND_COUNT];
-  msg("Decoding %d bytes at %llx\n", byte_length, ea);
+  // msg("Decoding %d bytes at %llx\n", byte_length, ea);
 
   status = ZydisDecoderDecodeFull(&decoder, &data, byte_length, &instruction, operands);
   if (!ZYAN_SUCCESS(status))
@@ -1719,12 +2034,12 @@ void decode_segments(ea_t ea)
     // PrintStatusError(status, "Failed to decode instruction");
     return;
   }
-  msg("Decoded %d bytes at %llx\n", byte_length, ea);
+  // msg("Decoded %d bytes at %llx\n", byte_length, ea);
 
   // PrintInstruction(&decoder, &instruction, operands, ea);
-  //ZYAN_PUTS("");
+  // ZYAN_PUTS("");
   // PrintSectionHeader("SEGMENTS");
-  PrintSegments(&instruction, &data[0], ZYAN_TRUE);
+  PrintSegments(&instruction, &data[0], print_hints);
 }
 
 //--------------------------------------------------------------------------
@@ -1734,20 +2049,51 @@ ssize_t idaapi plugin_ctx_t::on_event(ssize_t code, va_list va)
   {
   case ui_get_custom_viewer_hint:
   {
+    ///< cb: ui wants to display a hint for a viewer (idaview or custom).
+    ///< Every subscriber is supposed to append the hint lines
+    ///< to HINT and increment IMPORTANT_LINES accordingly.
+    ///< Completely overwriting the existing lines in HINT
+    ///< is possible but not recommended.
+    ///< If the REG_HINTS_MARKER sequence is found in the
+    ///< returned hints string, it will be replaced with the
+    ///< contents of the "regular" hints.
+    ///< If the SRCDBG_HINTS_MARKER sequence is found in the
+    ///< returned hints string, it will be replaced with the
+    ///< contents of the source-level debugger-generated hints.
+    ///< The following keywords might appear at the beginning of the
+    ///< returned hints:
+    ///< HIGHLIGHT text\n
+    ///<   where text will be highlighted
+    ///< CAPTION caption\n
+    ///<   caption for the hint widget
+    ///< \param[out] hint             (::qstring *) the output string,
+    ///<                              on input contains hints from the previous subscribes
+    ///< \param viewer                (TWidget*) viewer
+    ///< \param place                 (::place_t *) current position in the viewer
+    ///< \param[out] important_lines  (int *) number of important lines,
+    ///<                                     should be incremented,
+    ///<                                     if zero, the result is ignored
+    ///< \retval 0 continue collecting hints with other subscribers
+    ///< \retval 1 stop collecting hints
     qstring &hint = *va_arg(va, qstring *);
     TWidget *viewer = va_arg(va, TWidget *);
     place_t *place = va_arg(va, place_t *);
     int *important_lines = va_arg(va, int *);
-    if (widget == viewer) // our viewer
-    {
-      if (place == nullptr)
-        return 0;
-      simpleline_place_t *spl = (simpleline_place_t *)place;
-      hint.cat_sprnt("Hint for line %u " REG_HINTS_MARKER " \n", spl->n);
-      *important_lines += 1;
-    }
-    break;
+    if (widget == nullptr)
+      return 0;
+    if (place == nullptr)
+      return 0;
+    if (widget != viewer) // our viewer
+      return 0;
+
+    if (place == nullptr)
+      return 0;
+    simpleline_place_t *spl = (simpleline_place_t *)place;
+    hint.cat_sprnt("Hint for line %u\n", spl->n);
+    *important_lines += 1;
+    return 1; // we handled it
   }
+
   case ui_widget_invisible:
   {
     TWidget *w = va_arg(va, TWidget *);
@@ -1783,7 +2129,6 @@ ssize_t idaapi plugin_ctx_t::on_event(ssize_t code, va_list va)
 
     // qstring disasm;
     // generate_disasm_line(&disasm, current_ea, GENDSM_FORCE_CODE);
-
     decode_at_current_ea();
   }
   break;
@@ -1861,8 +2206,7 @@ static plugmod_t *idaapi init()
 {
   if constexpr (ONLY_X86)
   {
-    auto &&ph = get_ph();
-    if (ph && ph->id != PLFM_386)
+    if (PH.id != PLFM_386)
     {
       msg("[zydis] Unsupported processor type\n");
       return nullptr;
@@ -1878,8 +2222,6 @@ static plugmod_t *idaapi init()
   register_addon(&addon_info);
 
   auto ctx = new plugin_ctx_t;
-
-  //new zydis_prefix_t(ctx);
 
   return ctx;
 }
