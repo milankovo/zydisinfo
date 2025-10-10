@@ -2218,7 +2218,7 @@ static plugmod_t *idaapi init()
   addon_info.name = "Zydis info";
   addon_info.producer = "Milanek";
   addon_info.url = "https://github.com/milankovo/zydisinfo";
-  addon_info.version = "1.1";
+  addon_info.version = "1.1.1";
   register_addon(&addon_info);
 
   auto ctx = new plugin_ctx_t;
