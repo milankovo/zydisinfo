@@ -18,7 +18,7 @@ To build the Zydisinfo plugin, you will need to use the [ida-cmake](https://gith
 
 Please refer to the ida-cmake documentation for instructions on how to set up and use the build system.
 
-Once you have set up the ida-cmake build system, you can build the Instrlen plugin by running the following commands:
+Once you have set up the ida-cmake build system, you can build the Zydisinfo plugin by running the following commands:
 
 ```
 git clone https://github.com/milankovo/zydisinfo --recurse-submodules
