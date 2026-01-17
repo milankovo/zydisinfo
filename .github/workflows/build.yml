@@ -100,6 +100,7 @@ jobs:
         run: |
           mkdir -p artifacts
           cp -v ./ida-sdk/bin/plugins/zydisinfo* artifacts/
+          cp -r images artifacts/
           jq '.plugin.idaVersions = "==${{ matrix.ida.version }}"' ida-plugin.json > artifacts/ida-plugin.json
 
       - name: Upload artifacts
