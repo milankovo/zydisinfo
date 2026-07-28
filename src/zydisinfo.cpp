@@ -2105,30 +2105,33 @@ ssize_t idaapi plugin_ctx_t::on_event(ssize_t code, va_list va)
     }
   }
   break;
-  case ui_updating_actions:
+  case ui_screen_ea_changed:
   {
     /*
-    ui_updating_actions,  ///< cb: IDA is about to update all actions. If your plugin
-                            ///< needs to perform expensive operations more than once
-                            ///< (e.g., once per action it registers), you should do them
-                            ///< only once, right away.
-                            ///< \param ctx  (::action_update_ctx_t *)
+    ui_screen_ea_changed,
+                            ///< cb: The "current address" changed
+                            ///< \param ea          (ea_t)
+                            ///< \param prev_ea     (ea_t)
                             ///< \return void
      */
-    action_update_ctx_t *ctx = va_arg(va, action_update_ctx_t *);
-    if (ctx->cur_ea == BADADDR)
+    ea_t ea = va_arg(va, ea_t);
+    ea_t prev_ea = va_arg(va, ea_t);
+    qnotused(prev_ea);
+
+    if (widget == nullptr)
       return 0;
 
-    if (!is_mapped(ctx->cur_ea))
+    if (ea == BADADDR)
       return 0;
 
-    if (ctx->cur_ea == current_ea)
+    if (!is_mapped(ea))
       return 0;
 
-    current_ea = ctx->cur_ea;
+    if (ea == current_ea)
+      return 0;
 
-    // qstring disasm;
-    // generate_disasm_line(&disasm, current_ea, GENDSM_FORCE_CODE);
+    current_ea = ea;
+
     decode_at_current_ea();
   }
   break;
