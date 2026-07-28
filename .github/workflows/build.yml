@@ -45,13 +45,7 @@ jobs:
     steps:
       - name: Setup MSBuild
         if: matrix.os.name == 'windows'
-        uses: microsoft/setup-msbuild@v1.1
-
-      - name: Setup Visual Studio 2022
-        if: matrix.os.name == 'windows'
-        uses: ilammy/msvc-dev-cmd@v1
-        with:
-          vsversion: 2022
+        uses: microsoft/setup-msbuild@v2
 
       - name: Checkout
         uses: actions/checkout@v5
