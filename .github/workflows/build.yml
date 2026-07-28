@@ -83,8 +83,14 @@ jobs:
         shell: bash
         env:
           IDASDK: ${{ github.workspace }}/ida-sdk
+          OS_NAME: ${{ matrix.os.name }}
         run: |
+          generator_args=()
+          if [ "$OS_NAME" = "windows" ]; then
+            generator_args=(-G "Visual Studio 17 2022" -A x64)
+          fi
           cmake -B build -DEA64=YES -S src/ \
+            "${generator_args[@]}" \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_POSITION_INDEPENDENT_CODE=ON
           cmake --build build --config Release
