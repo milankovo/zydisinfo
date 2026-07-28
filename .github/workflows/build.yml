@@ -77,7 +77,7 @@ jobs:
       - name: Setup CMake
         uses: jwlawson/actions-setup-cmake@v2
         with:
-          cmake-version: '3.28.x'
+          cmake-version: '4.2.x'
 
       - name: Build
         shell: bash
@@ -87,7 +87,7 @@ jobs:
         run: |
           generator_args=()
           if [ "$OS_NAME" = "windows" ]; then
-            generator_args=(-G "Visual Studio 17 2022" -A x64)
+            generator_args=(-A x64)
           fi
           cmake -B build -DEA64=YES -S src/ \
             "${generator_args[@]}" \
